@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <cstring>
+#include <sys/select.h>
 
 #include "OrderBook.h"
 #include "ThreadPool.h"
@@ -16,16 +17,15 @@
 using namespace std;
 
 static atomic<bool> keepRunning{true};
-static int serverSocketGlobal = -1;
 
-// Ctrl+C handler: stop accepting new connections instead of dying mid-flight.
-// The accept() loop checks keepRunning and exits cleanly; in-flight tasks
-// already queued in the thread pool still get finished (see ThreadPool dtor).
+// Ctrl+C handler: just flip a flag. The accept loop below polls this flag
+// via select()'s timeout instead of relying on shutdown()/close() to
+// interrupt a blocking accept() call -- that trick is not portable (it
+// reliably unblocks accept() on Linux but often does NOT on macOS/BSD).
+// Polling with select() works identically on both.
 void signalHandler(int)
 {
     keepRunning = false;
-    if (serverSocketGlobal != -1)
-        shutdown(serverSocketGlobal, SHUT_RDWR); // unblocks a pending accept()
 }
 
 void handleClient(int clientSocket, OrderBook& book, TradeLogger& logger)
@@ -91,7 +91,6 @@ int main()
 
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket == -1) { cout << "Socket creation failed!\n"; return 1; }
-    serverSocketGlobal = serverSocket;
 
     int opt = 1;
     setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -118,13 +117,24 @@ int main()
 
     while (keepRunning)
     {
-        int clientSocket = accept(serverSocket, nullptr, nullptr);
+        // Wait up to 1 second for an incoming connection. This bounds how
+        // long a blocking accept() call could otherwise sit idle, so the
+        // loop wakes up regularly to re-check keepRunning -- portable across
+        // Linux and macOS, unlike relying on shutdown()/close() to interrupt
+        // a blocked accept().
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(serverSocket, &readfds);
+        struct timeval tv{1, 0}; // 1 second
 
+        int ready = select(serverSocket + 1, &readfds, nullptr, nullptr, &tv);
+
+        if (ready <= 0)
+            continue; // timeout (no connection yet) or interrupted -- loop back and check keepRunning
+
+        int clientSocket = accept(serverSocket, nullptr, nullptr);
         if (clientSocket == -1)
-        {
-            if (!keepRunning) break; // accept() was unblocked by shutdown()
             continue;
-        }
 
         // Hand the socket to the pool instead of spawning a new OS thread.
         // A fixed number of workers process an unbounded number of clients.
