@@ -1,20 +1,23 @@
 #include "OrderBook.h"
 #include <iostream>
 #include <algorithm>
+#include <sstream>
 
 using namespace std;
 
 // ============================================
-// Add Order
+// Add Order (thread-safe entry point)
 // ============================================
-void OrderBook::addOrder(const Order& incoming)
+OrderResult OrderBook::addOrder(const Order& incoming)
 {
     Order order = incoming;
 
+    lock_guard<mutex> lock(bookMutex); // scoped lock: released automatically on return
+
     if (order.side == Side::BUY)
-        matchBuy(order);
+        return matchBuy(order);
     else
-        matchSell(order);
+        return matchSell(order);
 }
 
 // ============================================
@@ -22,6 +25,8 @@ void OrderBook::addOrder(const Order& incoming)
 // ============================================
 void OrderBook::printOrderBook() const
 {
+    lock_guard<mutex> lock(bookMutex);
+
     cout << "\n===== ORDER BOOK =====\n";
 
     cout << "\nBUY SIDE (Price Desc):\n";
@@ -36,8 +41,11 @@ void OrderBook::printOrderBook() const
 // ============================================
 // Match Buy Orders
 // ============================================
-void OrderBook::matchBuy(Order& buyOrder)
+OrderResult OrderBook::matchBuy(Order& buyOrder)
 {
+    OrderResult result{buyOrder.id, 0, 0, ""};
+    ostringstream trades;
+
     while (buyOrder.quantity > 0 && !sellBook.empty())
     {
         auto bestSell = sellBook.begin();
@@ -51,17 +59,14 @@ void OrderBook::matchBuy(Order& buyOrder)
         {
             Order& sellOrder = sellQueue.front();
 
-            int tradedQty = min(buyOrder.quantity,
-                                sellOrder.quantity);
+            int tradedQty = min(buyOrder.quantity, sellOrder.quantity);
 
             buyOrder.quantity -= tradedQty;
             sellOrder.quantity -= tradedQty;
+            result.filledQty += tradedQty;
 
-            cout << "\nTRADE EXECUTED\n";
-            cout << "Buy ID  : " << buyOrder.id << endl;
-            cout << "Sell ID : " << sellOrder.id << endl;
-            cout << "Price   : " << bestSell->first << endl;
-            cout << "Qty     : " << tradedQty << endl;
+            trades << "[FILL " << tradedQty << "@" << bestSell->first
+                   << " vs sell#" << sellOrder.id << "] ";
 
             if (sellOrder.quantity == 0)
                 sellQueue.pop();
@@ -73,13 +78,20 @@ void OrderBook::matchBuy(Order& buyOrder)
 
     if (buyOrder.quantity > 0)
         buyBook[buyOrder.price].push(buyOrder);
+
+    result.remainingQty = buyOrder.quantity;
+    result.trades = trades.str();
+    return result;
 }
 
 // ============================================
 // Match Sell Orders
 // ============================================
-void OrderBook::matchSell(Order& sellOrder)
+OrderResult OrderBook::matchSell(Order& sellOrder)
 {
+    OrderResult result{sellOrder.id, 0, 0, ""};
+    ostringstream trades;
+
     while (sellOrder.quantity > 0 && !buyBook.empty())
     {
         auto bestBuy = buyBook.begin();
@@ -93,17 +105,14 @@ void OrderBook::matchSell(Order& sellOrder)
         {
             Order& buyOrder = buyQueue.front();
 
-            int tradedQty = min(sellOrder.quantity,
-                                buyOrder.quantity);
+            int tradedQty = min(sellOrder.quantity, buyOrder.quantity);
 
             sellOrder.quantity -= tradedQty;
             buyOrder.quantity -= tradedQty;
+            result.filledQty += tradedQty;
 
-            cout << "\nTRADE EXECUTED\n";
-            cout << "Buy ID  : " << buyOrder.id << endl;
-            cout << "Sell ID : " << sellOrder.id << endl;
-            cout << "Price   : " << bestBuy->first << endl;
-            cout << "Qty     : " << tradedQty << endl;
+            trades << "[FILL " << tradedQty << "@" << bestBuy->first
+                   << " vs buy#" << buyOrder.id << "] ";
 
             if (buyOrder.quantity == 0)
                 buyQueue.pop();
@@ -115,4 +124,8 @@ void OrderBook::matchSell(Order& sellOrder)
 
     if (sellOrder.quantity > 0)
         sellBook[sellOrder.price].push(sellOrder);
+
+    result.remainingQty = sellOrder.quantity;
+    result.trades = trades.str();
+    return result;
 }

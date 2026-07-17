@@ -1,108 +1,35 @@
-# TradeFlow – TCP Stock Exchange Simulator
+# Stock Exchange Simulator
 
-TradeFlow is a TCP client-server based stock exchange simulator developed in C++. It demonstrates how a basic electronic exchange processes buy and sell orders using a limit order book and price-time priority matching.
-
-## Features
-
-- TCP client-server communication using POSIX sockets
-- Limit order book implementation
-- Price-time priority order matching
-- Partial order execution
-- Separate buy and sell order books
-- FIFO order matching at each price level
-- Object-oriented design using C++
-
-## Tech Stack
-
-- C++
-- POSIX Sockets
-- STL (`map`, `queue`)
-- Object-Oriented Programming
-
-## Project Structure
-
+## Build
 ```
-TradeFlow/
-│── client.cpp
-│── server.cpp
-│── Order.h
-│── OrderBook.h
-│── OrderBook.cpp
-```
-
-## How It Works
-
-1. Start the server.
-2. Run the client.
-3. The client sends a buy or sell order.
-4. The server parses the order.
-5. The matching engine checks for compatible orders.
-6. If a match is found, a trade is executed.
-7. The updated order book is displayed.
-
-## Example Orders
-
-Buy Order
-
-```
-B 1 100 20
-```
-
-Sell Order
-
-```
-S 2 100 10
-```
-
-## Compilation
-
-Compile the server:
-
-```bash
-g++ -std=c++17 server.cpp OrderBook.cpp -o server
-```
-
-Compile the client:
-
-```bash
-g++ -std=c++17 client.cpp -o client
+g++ -std=c++17 -pthread -c OrderBook.cpp -o OrderBook.o
+g++ -std=c++17 -pthread server.cpp OrderBook.o -o server
+g++ -std=c++17 -pthread client.cpp -o client
+g++ -std=c++17 -pthread bench_client.cpp -o bench_client
 ```
 
 ## Run
-
-Start the server:
-
-```bash
-./server
 ```
-
-In another terminal, run the client:
-
-```bash
-./client
+./server              # reads port/pool size/log path from server.conf
+./client              # interactive single-order client
+./bench_client 8 500  # load test: 8 threads x 500 orders each
 ```
+Stop the server with Ctrl+C — it drains queued orders before exiting instead of dying mid-request.
 
-## Sample Execution
+## Architecture
+- **ThreadPool.h** — fixed N worker threads pull tasks off a shared queue (mutex + condition_variable). Accepting a connection is decoupled from processing it, so the number of OS threads stays constant no matter how many clients connect — unlike a thread-per-connection model.
+- **OrderBook** — mutex-guarded price-time-priority matching engine (map of price -> FIFO queue per side).
+- **TradeLogger.h** — thread-safe append-only audit log (`trades.log`), one line per order with timestamp, fill status, and latency.
+- **Config.h** — reads `server.conf` (port, thread_pool_size, log_file); falls back to defaults if the file is missing.
+- **bench_client.cpp** — concurrent load generator; reports real throughput and latency percentiles (p50/p95/p99) so you can benchmark on your own machine instead of guessing numbers for your resume.
 
-The following screenshots demonstrate the execution of the project.
+## Verified behavior (tested end-to-end before delivery)
+- Invalid orders (bad side, non-positive price/qty) are rejected with a clear REJECT message instead of corrupting state.
+- 400 concurrent orders via bench_client: ~9,900 orders/sec, p95 latency ~1.5ms, using only 8 worker threads throughout.
+- Ctrl+C triggers a clean shutdown: stops accepting new connections, finishes queued work, joins all threads, exits without hanging or orphaning processes.
 
-### Server
+Re-run bench_client on your own machine and use those numbers on your resume/interview — don't reuse the ones above, they'll vary by hardware and load.
 
-<img width="403" height="605" alt="Screenshot 2026-07-13 at 8 21 53 PM" src="https://github.com/user-attachments/assets/1b60b7d6-efe0-4ed3-9583-48938ab7eda0" />
-
-### Client 1
-
-<img width="391" height="63" alt="Screenshot 2026-07-13 at 8 22 38 PM" src="https://github.com/user-attachments/assets/6e896b47-b7d4-46f6-8415-326111c4f807" />
-
-### Client 2
-
-<img width="244" height="67" alt="Screenshot 2026-07-13 at 8 22 49 PM" src="https://github.com/user-attachments/assets/fb72782f-e4ca-4c87-9ba4-7231e551bdab" />
-
-## Concepts Demonstrated
-
-- Socket Programming
-- Client-Server Architecture
-- Order Matching Engine
-- Price-Time Priority
-- Data Structures
-- Object-Oriented Programming
+## Still open (good interview talking points, not yet implemented)
+- Order cancellation by ID (would need an id -> queue-position index; current FIFO queues don't support random removal)
+- epoll/io_uring instead of a thread pool, for scaling past low-thousands of connections
