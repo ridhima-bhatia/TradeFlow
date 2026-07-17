@@ -28,9 +28,9 @@ Stop the server with Ctrl+C — it stops accepting new connections and finishes 
 ## Benchmark
 Run `./bench_client <num_threads> <orders_per_thread>` against a running server to measure throughput and latency on your own machine. Example output format:
 ```
-Total orders completed : 400
-Throughput              : 9895.66 orders/sec
-Latency (ms): min=0.06  avg=0.68  p50=0.60  p95=1.46  p99=1.99  max=2.94
+Total orders completed : 4000
+Throughput              : 14802.6 orders/sec
+Latency (ms): min=0.17  avg=0.51  p50=0.50  p95=0.63  p99=0.73  max=1.53
 ```
 
 ## Design notes
